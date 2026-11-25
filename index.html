@@ -1164,7 +1164,8 @@ function commerceUI(api) {
 
   function finance() {
     const tabs = sectionTabs([['reports', 'ОПиУ · ДДС · баланс'], ['sources', 'Начисления и источники'], ['expenses', 'Статьи расходов']], state.financeTab, 'financeTab');
-    if (state.financeTab === 'reports') return api.enhanced().finance().replace('<div class="filterbar">', () => companies() + tabs + '<div class="filterbar">') +
+    if (state.financeTab === 'reports') return api.enhanced().finance().replace('<div class="filterbar">', () =>
+      companies().replace('</div>', button('Расход с категорией', 'expense-new') + '</div>') + tabs + '<div class="filterbar">') +
       note('Вид «Все площадки» включает общие расходы юрлица. В срезе отдельного МП показаны только его прямые операции. Распределение общих затрат вручную не задано.');
     const entries = ledgerWithSources(db(), ledger(db())).filter(e => e.date >= ui.from && e.date <= ui.to &&
       (ui.brand === 'Все бренды' || e.brand === ui.brand) && (ui.channel === 'Все площадки' || e.channel === ui.channel));
@@ -1309,7 +1310,7 @@ function commerceUI(api) {
       case 'inventory': case 'cm-stocktake-new': stocktakeNew(); break;
       case 'receipt': case 'cm-receipts': state.purchaseTab = 'orders'; nav('procurement'); break;
       case 'geography': state.supplyTab = 'planner'; nav('supply'); break;
-      case 'ext-payment-new': case 'cm-expense-new': expenseModal(); break;
+      case 'cm-expense-new': expenseModal(); break;
       case 'cm-purchase-new': purchaseModal(); break;
       case 'cm-order': orderModal(target.dataset.id); break;
       case 'cm-purchase-receive': receiveOrderModal(target.dataset.id); break;
