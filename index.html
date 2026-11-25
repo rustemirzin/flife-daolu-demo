@@ -763,7 +763,7 @@ return {workspaceUI};
 })();
 modules["commerce-ui"] = (() => {
 const { TODAY, CHANNELS, product, balance, reserved, available, filterSales, metrics, previousRange } = modules["core"];
-const { ledger, accounts } = modules["operations"];
+const { ledger, report, accounts } = modules["operations"];
 const {
   COMPANIES, EXPENSES, CLUSTERS, locationStock, goodsPosition, purchasingRows, saveNorms,
   createPurchase, purchaseTotal, receivePurchase, payPurchase, transferLocation,
@@ -1163,14 +1163,36 @@ function commerceUI(api) {
   }
 
   function finance() {
-    const tabs = sectionTabs([['reports', 'ОПиУ · ДДС · баланс'], ['sources', 'Начисления и источники'], ['expenses', 'Статьи расходов']], state.financeTab, 'financeTab');
+    const tabs = sectionTabs([['reports', 'ОПиУ · ДДС · баланс'], ['markets', 'Юрлица и площадки'], ['sources', 'Начисления и источники'], ['expenses', 'Статьи расходов']], state.financeTab, 'financeTab');
     if (state.financeTab === 'reports') return api.enhanced().finance().replace('<div class="filterbar">', () =>
       companies().replace('</div>', button('Расход с категорией', 'expense-new') + '</div>') + tabs + '<div class="filterbar">') +
       note('Вид «Все площадки» включает общие расходы юрлица. В срезе отдельного МП показаны только его прямые операции. Распределение общих затрат вручную не задано.');
     const entries = ledgerWithSources(db(), ledger(db())).filter(e => e.date >= ui.from && e.date <= ui.to &&
       (ui.brand === 'Все бренды' || e.brand === ui.brand) && (ui.channel === 'Все площадки' || e.channel === ui.channel));
     let content;
-    if (state.financeTab === 'expenses') {
+    if (state.financeTab === 'markets') {
+      const brands = ui.brand === 'Все бренды' ? COMPANIES.map(c => c.id) : [ui.brand];
+      const channels = ui.channel === 'Все площадки' ? [...CHANNELS, 'Общие расходы'] : [ui.channel];
+      const rowFor = (brand, channel, label) => {
+        const r = report(entries, { from: ui.from, to: ui.to, brand, channel });
+        const direct = r.expenses.cost + r.expenses.commission + r.expenses.logistics + r.expenses.ads + r.expenses.tax;
+        const other = Object.values(r.expenses).reduce((total, value) => total + value, 0) - direct;
+        return [esc(label), esc(channel === 'Все площадки' ? 'Итого' : channel), money(r.revenue), money(r.expenses.cost),
+          money(r.expenses.commission), money(r.expenses.logistics), money(r.expenses.ads), money(other), money(r.expenses.tax),
+          money(r.otherIncome), `<strong class="${r.profit < 0 ? 'negative' : 'positive'}">${money(r.profit)}</strong>`, r.revenue ? pct(r.profit / r.revenue * 100) : '—'];
+      };
+      const rows = [];
+      for (const brand of brands) {
+        rows.push(...channels.map(channel => rowFor(brand, channel, companyName(brand))));
+        const total = rowFor(brand, ui.channel, 'Итого ' + companyName(brand));
+        rows.push(`<tr class="sheet-total">${total.map(value => `<td>${value}</td>`).join('')}</tr>`);
+      }
+      const total = rowFor(ui.brand, ui.channel, 'Итого по бизнесу');
+      rows.push(`<tr class="sheet-total">${total.map(value => `<td>${value}</td>`).join('')}</tr>`);
+      content = sheet(['Юрлицо', 'Маркетплейс', 'Выручка', 'Себестоимость', 'Комиссии', 'Логистика', 'Реклама', 'Прочие расходы', 'Налоги', 'Прочие доходы', 'Чистая прибыль', 'Маржа'], rows,
+        [['Разрез учёта', 2], ['Доходы и затраты', 8, 'group-market'], ['Результат', 2, 'group-purchase']]) +
+        note('Общие расходы показаны отдельной строкой каждого юрлица и включены в его итог. В срезе одного маркетплейса показаны его прямые операции. Итоговая маржа рассчитывается из общей прибыли и выручки.');
+    } else if (state.financeTab === 'expenses') {
       const groups = new Map();
       for (const e of entries) {
         if (!e.debit.startsWith('expense_') && !['cost', 'commission', 'logistics', 'ads', 'tax', 'overhead', 'storage', 'penalties'].includes(e.debit)) continue;
