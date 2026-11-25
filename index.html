@@ -246,7 +246,7 @@ return {team,upgrade,accounts,ledger,report,addCashOperation,taskRange,reconcile
 modules["commerce"] = (() => {
 const {
   TODAY, CHANNELS, product, balance, available, reserved, filterSales, metrics,
-  createShipment
+  createShipment, importRows
 } = modules["core"];
 const { ledger:financialLedger, report:financialReport } = modules["operations"];
 
@@ -687,7 +687,24 @@ function reviewDraft(db, review) {
   return `Спасибо за отзыв! Рады, что ${p.name} вам подошёл.${keyword && review.text.toLowerCase().includes(keyword.toLowerCase()) ? ' Спасибо, что отметили ' + keyword + '.' : ''}`;
 }
 
-return {COMPANIES,EXPENSES,CLUSTERS,roundMoney,migrateCommerce,reconcileCommerce,locationStock,transferLocation,goodsPosition,incomingQty,monthlyDemand,purchasingRows,saveNorms,createPurchase,purchaseTotal,payPurchase,receivePurchase,startStocktake,submitStocktake,applyStocktake,splitQuantity,clusterRows,planClusterShipment,marketEconomics,saveTariff,requestPrice,confirmPrice,dailyReport,importDemoSource,addBusinessExpense,ledgerWithSources,seoFieldChecks,reviewDraft};
+function importSalesReports(db, rows, key, replaceExisting = false) {
+  const rowKey = row => [row.date, row.product, row.channel].join('|');
+  const copy = structuredClone(db);
+  if (replaceExisting) {
+    const keys = new Set(rows.map(rowKey));
+    copy.sales = copy.sales.filter(row => !keys.has(rowKey(row)));
+  }
+  // Validate the whole batch before changing either history or the import journal.
+  importRows(copy, rows, key);
+  db.sales = copy.sales;
+  db.imports = copy.imports;
+  if (replaceExisting) {
+    db.salesOverrides ||= {};
+    for (const row of rows) db.salesOverrides[rowKey(row)] = structuredClone(row);
+  }
+}
+
+return {COMPANIES,EXPENSES,CLUSTERS,roundMoney,migrateCommerce,reconcileCommerce,locationStock,transferLocation,goodsPosition,incomingQty,monthlyDemand,purchasingRows,saveNorms,createPurchase,purchaseTotal,payPurchase,receivePurchase,startStocktake,submitStocktake,applyStocktake,splitQuantity,clusterRows,planClusterShipment,marketEconomics,saveTariff,requestPrice,confirmPrice,dailyReport,importDemoSource,addBusinessExpense,ledgerWithSources,seoFieldChecks,reviewDraft,importSalesReports};
 })();
 modules["workspace-ui"] = (() => {
 const {team,ledger,report,addCashOperation,taskRange,reconcileBins,transferBin,abcAnalysis,barcodeSVG} = modules["operations"];
@@ -739,14 +756,14 @@ function workspaceUI(api){
 return {workspaceUI};
 })();
 modules["commerce-ui"] = (() => {
-const { TODAY, CHANNELS, product, balance, reserved, available, filterSales, metrics, importRows, previousRange } = modules["core"];
+const { TODAY, CHANNELS, product, balance, reserved, available, filterSales, metrics, previousRange } = modules["core"];
 const { ledger, accounts } = modules["operations"];
 const {
   COMPANIES, EXPENSES, CLUSTERS, locationStock, goodsPosition, purchasingRows, saveNorms,
   createPurchase, purchaseTotal, receivePurchase, payPurchase, transferLocation,
   startStocktake, submitStocktake, applyStocktake, clusterRows, planClusterShipment,
   marketEconomics, saveTariff, requestPrice, confirmPrice,
-  dailyReport, importDemoSource, addBusinessExpense, ledgerWithSources
+  dailyReport, importSalesReports, importDemoSource, addBusinessExpense, ledgerWithSources
 } = modules["commerce"];
 
 function commerceUI(api) {
@@ -1213,8 +1230,9 @@ function commerceUI(api) {
       <p>Можно объединить несколько недельных CSV в месячный отчёт. Формат строк приведён ниже.</p>
       ${field('Файлы CSV · можно несколько', '<input name="files" type="file" accept=".csv,text/csv" multiple>')}
       ${field('Или вставьте CSV', `<textarea name="csv" rows="6" placeholder="${esc(sample)}"></textarea>`)}
+      <label class="checkbox"><input name="replace" type="checkbox"> Заменить существующие строки с теми же датой, SKU и площадкой</label>
       <pre class="claim-text">${esc(sample)}</pre>
-      ${note('orderCount — количество заказов после отмен. Поле необязательно. Исходные выгрузки кабинетов перед загрузкой приводятся к этому формату. Проверяются дубли и вся партия целиком.')}
+      ${note('orderCount — число заказов после отмен. Заказ с несколькими SKU учитывается в одной строке. Поле необязательно. Исходные выгрузки кабинетов перед загрузкой приводятся к этому формату. Проверяются дубли и вся партия целиком.')}
       ${foot('Проверить и загрузить')}</form>`, true);
   }
 
@@ -1416,7 +1434,7 @@ function commerceUI(api) {
             });
           });
           mutate(() => {
-            importRows(db(), rows, texts.join('\n').trim());
+            importSalesReports(db(), rows, texts.join('\n').trim(), fd.has('replace'));
             ui.from = rows.map(r => r.date).sort()[0]; ui.to = rows.map(r => r.date).sort().at(-1);
           }, 'Отчёты объединены, продажи и ежедневные метрики обновлены');
         } catch (error) { $('#form-error').textContent = error.message; $('#form-error').hidden = false; }
@@ -1471,7 +1489,7 @@ const {reconcileCommerce,seoFieldChecks,reviewDraft} = modules["commerce"];
 const {commerceUI} = modules["commerce-ui"];
 const seed=()=>reconcileBins(reconcileCommerce(upgrade(seedBase())));
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
-const BASE=seed(),BASE_SALES_COUNT=BASE.sales.length;const KEY='flife-daolu-workspace-v1';let db,loadError='';try{const raw=localStorage.getItem(KEY);db=raw?JSON.parse(raw):BASE;if(db.packed){db.sales=[...BASE.sales,...db.sales];delete db.packed}if(db.version!==1||!Array.isArray(db.products)||!Array.isArray(db.movements))throw Error('format')}catch{db=seed();loadError='Сохранённые данные не удалось прочитать. Открыт исходный сценарий; используйте сброс, чтобы сохранить его.'}
+const BASE=seed();const saleKey=row=>[row.date,row.product,row.channel].join('|');const BASE_SALE_KEYS=new Set(BASE.sales.map(saleKey));const KEY='flife-daolu-workspace-v1';let db,loadError='';try{const raw=localStorage.getItem(KEY);db=raw?JSON.parse(raw):BASE;if(db.packed){db.sales=[...BASE.sales.map(row=>db.salesOverrides?.[saleKey(row)]||row),...db.sales];delete db.packed}if(db.version!==1||!Array.isArray(db.products)||!Array.isArray(db.movements))throw Error('format')}catch{db=seed();loadError='Сохранённые данные не удалось прочитать. Открыт исходный сценарий; используйте сброс, чтобы сохранить его.'}
 reconcileBins(reconcileCommerce(upgrade(db)));
 const ui={page:location.hash.slice(1)||'overview',from:'2026-11-01',to:TODAY,brand:'Все бренды',channel:'Все площадки',query:'',tab:'all',compare:'previous',year:'2026',historyDate:TODAY,role:'Марат',view:'table',sort:'profit',sortDirection:'desc'};
 const names={overview:'Обзор',sales:'Продажи и метрики',procurement:'Закупки из Китая',unit:'Юнит-экономика',prices:'Цены по площадкам',products:'Товары и наборы',stock:'Склад',warehouse:'Адресное хранение',analytics:'ABC и аналитика',chats:'Чаты с клиентами',supply:'Поставки',finance:'Финансы',reviews:'Отзывы и вопросы',content:'Контент и SEO',competitors:'Конкуренты',ads:'Реклама',tasks:'Задачи',rights:'Защита контента',settings:'Настройки'};
@@ -1490,7 +1508,7 @@ const prod=p=>`<button type="button" class="product-cell" data-product="${esc(p.
 const catalog=()=>db.products.filter(p=>(ui.brand==='Все бренды'||p.brand===ui.brand)&&(!ui.query||[p.name,p.id,p.barcode,p.wb,p.description,p.category].join(' ').toLowerCase().includes(ui.query.toLowerCase())));
 const scope=extra=>({from:ui.from,to:ui.to,brand:ui.brand,channel:ui.channel,...extra});
 const rows=extra=>filterSales(db,scope(extra));
-function persist(){try{localStorage.setItem(KEY,JSON.stringify({...db,sales:db.sales.slice(BASE_SALES_COUNT),packed:true}));return true}catch{toast('Не удалось сохранить: хранилище заполнено или недоступно. Экспортируйте данные.');return false}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify({...db,sales:db.sales.filter(row=>!BASE_SALE_KEYS.has(saleKey(row))),packed:true}));return true}catch{toast('Не удалось сохранить: хранилище заполнено или недоступно. Экспортируйте данные.');return false}}
 function toast(t){$('#toast').textContent=t;$('#toast').classList.add('show');clearTimeout(window.toastTimeout);window.toastTimeout=setTimeout(()=>$('#toast').classList.remove('show'),4000)}
 function mutate(fn,message){const snapshot=structuredClone(db);try{fn();reconcileCommerce(db);reconcileBins(db);if(!persist())throw Error('Не удалось сохранить. Освободите место или скачайте копию данных. Изменение отменено.');close();render();toast(message)}catch(e){db=snapshot;const el=$('#form-error');if(el){el.textContent=e.message;el.hidden=false;el.focus()}else toast(e.message)}}
 function nav(page){if(!names[page])page='overview';close();ui.page=page;ui.query='';ui.tab='all';location.hash=page;render();window.scrollTo(0,0)}
