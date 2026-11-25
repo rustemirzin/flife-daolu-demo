@@ -444,6 +444,10 @@ function payPurchase(db, id) {
   assert(financialReport(financialLedger(db), { brand: order.brand }).cashAfter >= purchaseTotal(order), 'Недостаточно денег у выбранного юрлица для аванса.');
   posting(db, { brand: order.brand, channel: 'Общие расходы', debit: 'advances', credit: 'cash',
     amount: purchaseTotal(order), label: 'Аванс поставщику ' + order.id, source: order.id });
+  const alreadyReceived = sum(db.commercePostings.filter(e => e.source === id && e.debit === 'inventory' && e.credit === 'payables'), e => e.amount);
+  const offset = Math.min(purchaseTotal(order), alreadyReceived);
+  if (offset) posting(db, { brand: order.brand, channel: 'Общие расходы', debit: 'payables', credit: 'advances',
+    amount: offset, label: 'Оплата полученной части ' + order.id, source: order.id });
   order.paid = true;
 }
 
@@ -477,7 +481,9 @@ function receivePurchase(db, id, counts, location, reason = '') {
   order.status = order.items.every(i => i.received >= i.qty) ? 'Закрыт' : 'Частично получен';
   db.purchaseReceipts.unshift(receipt);
   // Credit supplier payable, then offset prepaid amount without making advances negative.
-  const amount = Math.round(receiptValue);
+  const priorValue = sum(db.commercePostings.filter(e => e.source === id && e.debit === 'inventory' && e.credit === 'payables'), e => e.amount);
+  const exactCompletion = order.items.every(item => item.received === item.qty);
+  const amount = exactCompletion ? purchaseTotal(order) - priorValue : Math.round(receiptValue);
   posting(db, { brand: order.brand, channel: 'Общие расходы', debit: 'inventory', credit: 'payables', amount,
     label: 'Приёмка ' + receipt.id, source: order.id });
   if (order.paid) {
@@ -889,7 +895,7 @@ function commerceUI(api) {
     const opened = !['Закрыт', 'Отменён'].includes(order.status);
     modal(order.id, `<div class="document-meta"><span>${companyName(order.brand)}</span>${tag(order.status, statusColor(order.status))}<span>${esc(order.supplier)} · ${esc(order.agent)}</span><span>Ожидается ${date(order.eta)}</span></div>` +
       sheet(['Товар', 'Заказано', 'Получено', 'Осталось', 'Цена CNY', 'Сумма ₽'], order.items.map(i => [prod(product(db(), i.product)), num(i.qty), num(i.received), num(Math.max(0, i.qty - i.received)), cnyPrice(i.cny), money(i.qty * i.cny * order.rate)])) +
-      `<div class="document-total">Товар и доставка <strong>${money(purchaseTotal(order))}</strong></div><div class="actions">${!order.paid && opened ? button('Провести аванс в демо', 'purchase-pay', id) : ''}${opened ? button('Принять товары', 'purchase-receive', id, true) : ''}</div>` +
+      `<div class="document-total">Товар и доставка <strong>${money(purchaseTotal(order))}</strong></div><div class="actions">${!order.paid && order.status !== 'Отменён' ? button('Провести оплату в демо', 'purchase-pay', id) : ''}${opened ? button('Принять товары', 'purchase-receive', id, true) : ''}</div>` +
       note('Приёмка обновляет выбранное место хранения, заказ и финансовый журнал. Банковский платёж имитируется.'), true);
   }
 
